@@ -30,7 +30,7 @@ sudo apt update && sudo apt install ffmpeg  # Linux
 ## 📁 Project Structure
 
 
-
+```
 .
 ├── audios/          # Raw audio files
 ├── transcribe/      # Whisper JSON transcripts
@@ -38,7 +38,7 @@ sudo apt update && sudo apt install ffmpeg  # Linux
 ├── query.py         # Main RAG interface
 ├── transcribe.py    # Audio processing
 └── insert_faiss.py  # Index builder
-
+```
 
 
 ## 🧠 How It Works
