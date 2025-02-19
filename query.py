@@ -31,33 +31,130 @@ def list_ollama_models():
         return [f"Error fetching Ollama models {e}"]
 
 
-def search_faiss(query, top_k=5):
-    """搜索 Faiss 并返回匹配的文本和 metadata"""
+def search_faiss(query, top_k=5, min_threshold=0.85):
+    """Search FAISS and retrieve matching text and metadata.
+
+    - If the similarity is above `min_threshold`, retrieve the entire video's transcript.
+    - Skip subsequent segments from the same video if the full video has been retrieved.
+
+    Args:
+        query (str): The input search query.
+        top_k (int): Number of top similar results to retrieve.
+        min_threshold (float): The similarity threshold to retrieve the entire video.
+
+    Returns:
+        list: A list of matching results.
+    """
     if not os.path.exists(FAISS_INDEX_PATH) or not os.path.exists(f"{FAISS_INDEX_PATH}_metadata.json"):
         return [{"error": "Faiss index or metadata file not found."}]
 
-    # 加载 Faiss 索引
+    # Load FAISS index
     index = faiss.read_index(FAISS_INDEX_PATH)
 
-    # 计算查询向量
+    # Compute query embedding
     query_embedding = embedding_model.encode([query], convert_to_tensor=True).cpu().numpy()
     distances, indices = index.search(query_embedding, top_k)
 
-    # 读取 metadata
+    # Load metadata
     with open(f"{FAISS_INDEX_PATH}_metadata.json", "r", encoding="utf-8") as f:
         metadata_list = {entry["id"]: entry for entry in json.load(f)}
 
     results = []
+    retrieved_videos = set()  # Keep track of retrieved full videos
+
     for i, idx in enumerate(indices[0]):
         if idx == -1:
             continue
+
         metadata = metadata_list.get(int(idx), {})
-        results.append({
-            "video_name": metadata.get("video_name", "Unknown"),
-            "text": metadata.get("text", "Unknown"),
-            "distance": float(distances[0][i])  # Convert numpy float to standard Python float
-        })
+        video_id = metadata.get("video_id", None)
+        video_name = metadata.get("video_name", "Unknown")
+        video_link = metadata.get("video_link", "")
+        text = metadata.get("text", "Unknown")
+
+        # Compute similarity (convert FAISS L2 distance to similarity)
+        similarity = 1 / (1 + distances[0][i])
+
+        print(f'current sim {similarity}')
+
+        if similarity >= min_threshold and video_id not in retrieved_videos:
+            # Retrieve the entire video's transcript
+            full_video_text = " ".join(
+                meta["text"] for meta in metadata_list.values() if meta["video_id"] == video_id
+            )
+
+            results.append({
+                "video_id": video_id,
+                "video_name": video_name,
+                "text": full_video_text,
+                "video_link": video_link,
+                "similarity": similarity,
+                "entire": True  # Mark that the full video was retrieved
+            })
+
+            retrieved_videos.add(video_id)  # Mark this video as fully retrieved
+        elif video_id not in retrieved_videos:  # Skip segments if the entire video was already retrieved
+            results.append({
+                "video_id": video_id,
+                "video_name": video_name,
+                "text": text,
+                "video_link": video_link,
+                "similarity": similarity,
+                "entire": False  # This is only a single segment
+            })
+
     return results
+
+
+
+def format_search_results(search_results):
+    """
+    Takes the list of results from search_faiss and returns an HTML string
+    containing embedded YouTube videos (if possible) and text snippets.
+    """
+    html_content = "<div style='max-height:600px; overflow:auto;'>"
+
+    for item in search_results:
+        video_url = item.get("video_link", "")
+        video_name = item.get("video_name", "")
+        text = item.get("text", "")
+        similarity = item.get("similarity", 0)
+        entire = item.get("entire", False)
+
+        # Attempt to parse out the YouTube video ID if it's a standard link
+        youtube_id = None
+        if "youtube.com/watch?v=" in video_url:
+            # Naive parsing – might need more robust logic if there are extra URL params
+            youtube_id = video_url.split("watch?v=")[-1].split("&")[0]
+
+        # Build a block of HTML per search result
+        html_content += "<div style='border:1px solid #ccc; margin:10px; padding:10px;'>"
+        html_content += f"<h4>Video Name: {video_name}</h4>"
+        html_content += f"<p><strong>Similarity:</strong> {similarity:.3f} | <strong>Entire Video Retrieved:</strong> {entire}</p>"
+
+        # If we found a YouTube ID, embed it:
+        if youtube_id:
+            embed_url = f"https://www.youtube.com/embed/{youtube_id}"
+            html_content += f"""
+                <div style='margin-bottom:10px;'>
+                  <iframe width="400" height="225" 
+                          src="{embed_url}" 
+                          frameborder="0" 
+                          allowfullscreen>
+                  </iframe>
+                </div>
+            """
+        else:
+            # Otherwise, just link it if it's not empty
+            if video_url:
+                html_content += f"<p><a href='{video_url}' target='_blank'>Open Video Link</a></p>"
+
+        # # Show the text snippet or the entire text
+        # html_content += f"<p>{text}</p>"
+        html_content += "</div>"  # End of item block
+
+    html_content += "</div>"
+    return html_content
 
 
 def query_llm(prompt, model_choice, api_choice=None, ollama_model_choice=None, api_url=None, api_token=None):
@@ -94,17 +191,20 @@ def query_llm(prompt, model_choice, api_choice=None, ollama_model_choice=None, a
         return "Invalid model choice. Please select 'Local Ollama' or 'API'."
 
 
-def rag_search(query, prompt_modification,top_k, model_choice, api_choice, ollama_model_choice, api_url, api_token):
+def rag_search(query, prompt_modification,top_k,threshold_slider, model_choice, api_choice, ollama_model_choice, api_url, api_token):
     """整合 Faiss 搜索和 LLM 查询"""
     # 首先使用 Faiss 搜索
-    search_results = search_faiss(query,top_k = top_k)
+    search_results = search_faiss(query,top_k = top_k, min_threshold=threshold_slider)
 
     # 将搜索结果添加到提示中
     full_prompt = f"{prompt_modification}\n\nQuery:\n{query}\n\nSearch Results:\n{search_results}"
 
     # 查询 LLM
     llm_response = query_llm(full_prompt, model_choice, api_choice, ollama_model_choice, api_url, api_token)
-    return search_results, llm_response
+
+    search_results_html = format_search_results(search_results)
+
+    return search_results, llm_response, search_results_html
 
 
 
@@ -129,6 +229,14 @@ with gr.Blocks() as demo:
                 step=1,
                 value=5,
                 label="Select Top-K Segments to Recall"
+            )
+
+            threshold_slider = gr.Slider(
+                minimum=0.0,
+                maximum=1.0,
+                step=0.01,
+                value=0.85,
+                label="Similarity Threshold for Retrieving Full Video"
             )
 
             # Choose between Local Ollama or API
@@ -217,6 +325,10 @@ with gr.Blocks() as demo:
             search_results_output = gr.JSON(label="Search Results",height=300)
             llm_response_output = gr.Markdown(label="LLM Response")
 
+            search_results_html = gr.HTML(label="Video & Clips", elem_id="video_clips_display")
+
+
+
     # Connect button click to rag_search
     search_button.click(
         fn=rag_search,
@@ -224,6 +336,7 @@ with gr.Blocks() as demo:
             query_input,
             prompt_mod_input,
             top_k_slider,
+            threshold_slider,
             model_choice,
             api_choice,
             ollama_model_choice,
@@ -232,7 +345,8 @@ with gr.Blocks() as demo:
         ],
         outputs=[
             search_results_output,
-            llm_response_output
+            llm_response_output,
+            search_results_html
         ]
     )
 

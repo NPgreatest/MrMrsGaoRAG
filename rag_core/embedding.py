@@ -1,19 +1,24 @@
-import json
 import os
+import json
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-# 使用本地 M3E embedding 模型
+# Set embedding model
 embedding_model = SentenceTransformer("moka-ai/m3e-base")
 
-# 设定数据目录
+# Paths
 TRANSCRIBE_DIR = "./transcribe/"
 FAISS_INDEX_PATH = "./faiss/faiss_index"
 
 
+def encode_text(text_list):
+    """Generate embeddings for a list of texts."""
+    return embedding_model.encode(text_list, convert_to_tensor=True).cpu().numpy()
+
+
 def split_text(text, chunk_size=300, max_chunk_size=500):
-    """将文本按 chunk_size 进行分割，并避免过长的 chunk"""
+    """Splits text into chunks while ensuring natural breaking points."""
     chunks, current_chunk = [], []
     current_length = 0
 
@@ -31,9 +36,9 @@ def split_text(text, chunk_size=300, max_chunk_size=500):
 
 
 def process_json_files():
-    """读取 JSON 并提取文本和元数据"""
+    """Reads JSON transcription files and extracts metadata."""
     all_texts, metadata_list = [], []
-    video_id_map = {}  # 用于存储视频 ID，确保唯一
+    video_id_map = {}
 
     for idx, filename in enumerate(os.listdir(TRANSCRIBE_DIR)):
         if not filename.endswith(".json"):
@@ -47,20 +52,15 @@ def process_json_files():
                 data = json.load(f)
 
             if "segments" not in data:
-                print(f"警告：{file_path} 缺少 'segments' 字段")
+                print(f"Warning: {file_path} missing 'segments' field")
                 continue
 
-            # 生成 video_id
             video_id = video_id_map.setdefault(video_name, idx)
-
-            # 解析视频链接（如果存在）
             video_link = data.get("video_link", "")
 
-            # 提取并分割文本
             full_text = " ".join(seg["text"] for seg in data["segments"])
             text_chunks = split_text(full_text)
 
-            # 记录所有文本及对应的 metadata
             all_texts.extend(text_chunks)
             metadata_list.extend([
                 {"video_id": video_id, "video_name": video_name, "text": chunk, "video_link": video_link}
@@ -68,35 +68,29 @@ def process_json_files():
             ])
 
         except Exception as e:
-            print(f"处理 {filename} 时出错: {e}")
+            print(f"Error processing {filename}: {e}")
 
     return all_texts, metadata_list
 
 
 def build_faiss_index():
-    """构建 FAISS 索引并存储"""
+    """Builds a FAISS index from transcript data."""
     all_texts, metadata_list = process_json_files()
 
     if not all_texts:
-        print("未找到任何文本数据")
+        print("No text data found.")
         return
 
-    # 生成嵌入向量
-    embeddings = embedding_model.encode(all_texts, convert_to_tensor=True).cpu().numpy()
-
-    # FAISS 索引
+    embeddings = encode_text(all_texts)
     dimension = embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
-    index = faiss.IndexIDMap2(index)  # 允许存储 ID 以匹配 metadata
+    index = faiss.IndexIDMap2(index)
 
-    # 为每个文本分配一个唯一的 ID
     ids = np.arange(len(all_texts))
     index.add_with_ids(embeddings, ids)
 
-    # 存储索引
     faiss.write_index(index, FAISS_INDEX_PATH)
 
-    # **存储 metadata 为 JSON**
     metadata_json = [
         {"id": int(id_), "video_id": meta["video_id"], "video_name": meta["video_name"],
          "text": meta["text"], "video_link": meta["video_link"]}
@@ -106,7 +100,7 @@ def build_faiss_index():
     with open(f"{FAISS_INDEX_PATH}_metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata_json, f, ensure_ascii=False, indent=4)
 
-    print(f"已创建 {len(all_texts)} 条文本的 FAISS 向量索引，并存储了 metadata")
+    print(f"FAISS index built with {len(all_texts)} text entries.")
 
 
 if __name__ == "__main__":
