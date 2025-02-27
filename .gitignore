@@ -3,3 +3,7 @@
 /venv
 /transcribe
 /.idea
+.env
+/log
+/ssl
+config.yaml

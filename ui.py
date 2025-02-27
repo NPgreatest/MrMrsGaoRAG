@@ -55,7 +55,7 @@ def format_search_results(search_results):
 
 def rag_search(query, prompt_mod, top_k, threshold, model_choice, api_choice, ollama_choice, api_url, api_token):
     """Perform FAISS search and LLM query."""
-    search_results = search_faiss(query, top_k=top_k, min_threshold=threshold)
+    search_results,_,_ = search_faiss(query, top_k=top_k, min_threshold=threshold)
     full_prompt = f"{prompt_mod}\n\nQuery:\n{query}\n\nSearch Results:\n{search_results}"
     llm_response = query_llm(full_prompt, model_choice, api_choice, ollama_choice, api_url, api_token)
     search_results_html = format_search_results(search_results)
