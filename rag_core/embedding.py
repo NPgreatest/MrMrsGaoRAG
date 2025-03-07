@@ -16,8 +16,9 @@ FAISS_INDEX_PATH = "./faiss/faiss_hnsw_index"
 
 
 def encode_text(text_list):
-    api_provider = SiliconFlowLLMAPI()
-    return api_provider.encode(text_list, convert_to_tensor=True).cpu().numpy()
+    # api_provider = SiliconFlowLLMAPI()
+    # return api_provider.encode_text(text_list,show_progress=True).cpu().numpy()
+    return embedding_model.encode(text_list,show_progress=True)
 
 
 def split_text(text, chunk_size=300, overlap=20):
@@ -87,8 +88,7 @@ def build_faiss_index():
         print("No text data found.")
         return
     print("try to embedding the texts")
-    silicon_api = SiliconFlowLLMAPI()
-    embeddings = silicon_api.encode_text(all_texts)
+    embeddings = encode_text(all_texts)
     print("done embedding the texts")
     dimension = embeddings.shape[1]
 

@@ -1,0 +1,3 @@
+EMBEDDING_MODEL: "Pro/BAAI/bge-m3"
+API_MODEL: "deepseek-ai/DeepSeek-V2.5"
+API_TOKEN: "sk-ijidmgvaqqecokabwllkrqosdawvfuzjtnrbjlubhqdhalcr"
